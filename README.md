@@ -1,1 +1,1 @@
-This project is to implement [Representation Learning for Information Extraction From Form Like Documents](https://storage.googleapis.com/pub-tools-public-publication-data/pdf/59f3bb33216eae711b36f3d8b3ee3cc67058803f.pdf).
+This repository contains an implementation of the [Representation Learning for Information Extraction From Form Like Documents](https://storage.googleapis.com/pub-tools-public-publication-data/pdf/59f3bb33216eae711b36f3d8b3ee3cc67058803f.pdf) paper.
