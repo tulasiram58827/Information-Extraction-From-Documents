@@ -1,10 +1,10 @@
 import cv2
 import glob
 import re
-import ast
 import json
 import imutils
 import numpy as np
+from pathlib import Path
 
 # https://stackoverflow.com/a/51855662
 import pandas as pd
@@ -15,16 +15,17 @@ import matplotlib.pyplot as plt
 
 from tqdm import tqdm
 from imutils import paths
-from google.colab.patches import cv2_imshow
+#from google.colab.patches import cv2_imshow
 from tensorflow.keras.layers.experimental.preprocessing import TextVectorization
 
 from utils import *
 
-images_path = '/home/ram/Projects/OCR/ICDAR-2019-SROIE/data/img/'
-json_path = '/home/ram/Projects/OCR/ICDAR-2019-SROIE/data/key/'
+images_path = 'data/img/'
+json_path = 'data/key/'
+output_path = Path('data/new_processed_files')
 
 images = sorted(list(paths.list_images(images_path)))
-csv_files = sorted(glob.glob("ocr_modified_files/*.csv"))
+csv_files = sorted(glob.glob("data/ocr_modified_files/*.csv"))
 
 def get_token(value):
     if is_date(value):
@@ -122,4 +123,5 @@ for file_idx, csv_file in enumerate(csv_files):
     
     #Write to csv file
     print(csv_file)
-    new_df.to_csv(f'new_processed_files/{file_name}')
+    output_path.mkdir(exist_ok=True)
+    new_df.to_csv(output_path / file_name)
