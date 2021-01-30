@@ -3,6 +3,7 @@ This repository contains an implementation of the [Representation Learning for I
 ## Project setup
 ```
 python -m virtualenv -p python3.8 venv
+source venv/bin/activate
 pip install -e .
 gdown --id 10r9y17wg8Elo-3Zi61xA_8QDaKix8giN -O data.tar.xz
 tar -xf data.tar.xz

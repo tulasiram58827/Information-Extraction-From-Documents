@@ -2,8 +2,7 @@ import re
 
 from dateutil.parser import parse
 
-
-
+neighbor_sep = '  '
 
 
 # Candidate Generator to check a numeric value
@@ -86,9 +85,9 @@ def generate_neighbors(orig_csv_df, filt_csv_df, image_shape, layer):
                 xx = (new_row['xmin']+new_row['xmax']) - (row['xmin']+row['xmax'])/2
                 yy = (new_row['ymin']+new_row['ymax']) - (row['ymin']+row['ymax'])/2
                 neigh_pos.append(f"({'%.3f' % (xx/image_shape[1])},{'%.3f' % (yy/image_shape[0])})")
-        neighbors = "  ".join(str(i) for i in neighbors)
-        neigh_pos = "  ".join(str(x) for x in neigh_pos)
-        neighbor_rows = "  ".join(str(tuple(x)) for x in neighbor_rows)
+        neighbors = neighbor_sep.join(str(i) for i in neighbors)
+        neigh_pos = neighbor_sep.join(str(x) for x in neigh_pos)
+        neighbor_rows = neighbor_sep.join(str(tuple(x)) for x in neighbor_rows)
         filt_csv_df.loc[idx, 'neighbors'] = neighbors
         filt_csv_df.loc[idx, 'neigh_pos'] = neigh_pos
         filt_csv_df.loc[idx, 'xmin'] = '%.3f' % (new_row['xmin']/image_shape[1])

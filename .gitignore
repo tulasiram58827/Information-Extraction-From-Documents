@@ -7,6 +7,7 @@ __pycache__
 venv
 *.xz
 data
+wandb
 
 # Vocab set up by data_processing.py
 vocab_new.txt

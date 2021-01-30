@@ -43,7 +43,6 @@ def get_token(value):
 
 
 # Create voabulary
-
 data = []
 for idx, entry in enumerate(csv_files):
     sample_csv = pd.read_csv(entry)
@@ -51,7 +50,7 @@ for idx, entry in enumerate(csv_files):
         value = str(value)
         if len(value) < 2:
             continue
-        for val in value.split(' '):
+        for val in value.split():
             val = val.replace('dale', 'date')
             data.append(get_token(val))
         

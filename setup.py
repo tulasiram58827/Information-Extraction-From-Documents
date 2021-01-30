@@ -11,6 +11,7 @@ setup(
         'imutils',
         'tqdm',
         'dateparser',
+        'wandb'
     ],
     python_requires='>=3.8',
 )
