@@ -43,6 +43,7 @@ def get_token(value):
 
 
 # Create voabulary
+#TODO separate [UNK] from [PAD]
 data = []
 for idx, entry in enumerate(csv_files):
     sample_csv = pd.read_csv(entry)

@@ -1,3 +1,4 @@
+from argparse import ArgumentParser
 import tensorflow as tf
 import tensorflow_addons as tfa
 import pandas as pd
@@ -15,46 +16,11 @@ preprocessed_path = Path('data/new_processed_files')
 models_path = Path('data/models/')
 models_path.mkdir(exist_ok=True)
 
-# Set CPU as available physical device
-tf.config.set_visible_devices([], 'GPU')
-
-use_wandb = False
-
-if use_wandb:
-    wandb.init(project="information_extraction")
-
 field_id_money = 0
 field_id_date = 1
-#TODO read vocab size from somewhere instead of hard-coding
-vocab_size = 512
-# This comes from TextVectorizer's default value (used in data_processing.py) and shouldn't be changed.
-# It allows us to use keras.Embedding mask_zero flag, and to compute a mask to give the attention mechanism.
-padding_val = 0
 
-model = Model(vocab_size=vocab_size, emb_dim=128, num_heads=8,
-              num_fields=4, num_neighbors=30, padding_val=padding_val)
 
-# temp_fieldid = tf.random.uniform((4, 1), dtype=tf.int64, minval=0, maxval=3)
-# temp_cand_pos = tf.random.uniform((4, 2), dtype=tf.float32, minval=0, maxval=1)
-
-# temp_textemb = tf.random.uniform((4, 10, 1), dtype=tf.int64, minval=0, maxval=512-1)
-# temp_posemb = tf.random.uniform((4, 10, 2), dtype=tf.float32, minval=0, maxval=1)
-
-# sample_output = sample_model(temp_fieldid, temp_cand_pos,
-# 	                         temp_textemb, temp_posemb, None)
-# print(temp_fieldid.shape, temp_cand_pos.shape, temp_textemb.shape, temp_posemb.shape)
-# print(sample_output)
-
-batch_size = 16
-
-epochs = 100
-
-loss_function = tf.keras.losses.BinaryCrossentropy()
-
-# Optimizer Rectified Adam(from paper)
-optimizer = tfa.optimizers.RectifiedAdam(0.001)
-
-def generate_data():
+def generate_data(max_neighbors):
     for csv_file in preprocessed_path.glob('*.csv'):
         key_file_path = f'{key_path / csv_file.stem}.json'
         with open(key_file_path, 'r') as f:
@@ -76,30 +42,16 @@ def generate_data():
                 row['neighbors'].split(neighbor_sep)
             except AttributeError:
                 continue
-            neighbor_textid = row['neighbors'].split(neighbor_sep)[:30]
-            # neighbor_textid = list(filter(lambda a: a != '', neighbor_textid))[:50]
-            neighbor_pos = row['neigh_pos'].split(neighbor_sep)[:30]
-            # neighbor_pos = list(filter(lambda a: a != '', neighbor_pos))[:50]
+            neighbor_textid = row['neighbors'].split(neighbor_sep)[:max_neighbors]
+            neighbor_pos = row['neigh_pos'].split(neighbor_sep)[:max_neighbors]
             new_pos = []
             for val in neighbor_pos:
                 out = val.replace('(', '').replace(')', '').split(',')
                 new_pos.append(out)
             yield field_id, cand_pos, neighbor_textid, new_pos, ground_truth
 
-# Read dataset into list first, so we have the size
-dataset_list = list(generate_data())
-dataset = tf.data.Dataset.from_generator(lambda: dataset_list,
-                                         output_types=(tf.int32, tf.float32, tf.int32, tf.float32, tf.int32),
-                                         output_shapes=((), (2,), (None,), (None, 2), ()))
 
-dataset = dataset.cache()
-dataset = dataset.prefetch(buffer_size=100)
-# Note this will use zero as the padding value, consistent with padding_val above
-dataset = dataset.padded_batch(batch_size)
-
-train_loss = tf.keras.metrics.Mean(name='train_loss')
-
-def train_step(input_vals):
+def train_step(input_vals, model, optimizer, loss_function):
     (field_id, cand_pos, neigh_text, neigh_pos, gt) = input_vals
     field_id = tf.expand_dims(field_id, axis=-1)
     neigh_text = tf.expand_dims(neigh_text, axis=-1)
@@ -111,17 +63,67 @@ def train_step(input_vals):
     gradients = tape.gradient(loss_value, model.trainable_variables)    
     optimizer.apply_gradients(zip(gradients, model.trainable_variables))
 
-    train_loss(loss_value)
+    return loss_value
 
-for epoch in range(epochs):
-    for (batch, input_vals) in tqdm(enumerate(dataset), desc=f"Epoch {epoch}", total=(len(dataset_list) // batch_size)):
-        train_step(input_vals)
+def train(dataset, dataset_len, batch_size, epochs, model, optimizer, use_wandb):
+    train_loss = tf.keras.metrics.Mean(name='train_loss')
+    loss_function = tf.keras.losses.BinaryCrossentropy()
+    for epoch in range(epochs):
+        for (batch, input_vals) in tqdm(enumerate(dataset), desc=f"Epoch {epoch}", total=(dataset_len // batch_size)):
+            loss = train_step(input_vals, model, optimizer, loss_function)
+            train_loss(loss)
 
-        if batch%50 == 0:
-            if use_wandb:
-                wandb.log({'loss': train_loss.result()})
-            print(f'Epoch {epoch} Batch {batch} Loss {train_loss.result()}')
+            if batch%50 == 0:
+                if use_wandb:
+                    wandb.log({'loss': train_loss.result()})
+                print(f'Epoch {epoch} Batch {batch} Loss {train_loss.result()}')
 
-    if (epoch+1)%10 == 0:
-        # Save the weights
-        model.save_weights(models_path / f'checkpoint_{epoch}')
+        if (epoch+1)%10 == 0:
+            # Save the weights
+            model.save_weights(models_path / f'checkpoint_{epoch}')
+
+if __name__ == "__main__":
+    parser = ArgumentParser()
+    parser.add_argument('--skip_wandb', dest='skip_wandb', action='store_true',
+                        help="To skip tracking experiments with weights&biases")
+    parser.set_defaults(skip_wandb=False)
+    parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--emb_dim', type=int, default=128,
+                        help="Embedding dimension. Used for both token IDs and position")
+    parser.add_argument('--attention_heads', type=int, default=8)
+    parser.add_argument('--max_neighbors', type=int, default=30)
+    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--lr', type=float, default=0.001)
+    args = parser.parse_args()
+    print(vars(args))
+
+    # Set CPU as available physical device by specifying no GPUs
+    tf.config.set_visible_devices([], 'GPU')
+
+    # Read dataset into list first, so we have the size
+    dataset_list = list(generate_data(args.max_neighbors))
+    dataset = tf.data.Dataset.from_generator(lambda: dataset_list,
+                                             output_types=(tf.int32, tf.float32, tf.int32, tf.float32, tf.int32),
+                                             output_shapes=((), (2,), (None,), (None, 2), ()))
+    dataset = dataset.cache()
+    #dataset = dataset.prefetch(buffer_size=100)
+    # Note this will use zero as the padding value, consistent with padding_val above
+    dataset = dataset.padded_batch(args.batch_size)
+
+    if not args.skip_wandb:
+        wandb.init(project="information_extraction")
+        wandb.config.update(vars(args))
+
+    # TODO read vocab size from somewhere instead of hard-coding
+    vocab_size = 512
+    # This comes from TextVectorizer's default value (used in data_processing.py) and shouldn't be changed.
+    # It allows us to use keras.Embedding mask_zero flag, and to compute a mask to give the attention mechanism.
+    padding_val = 0
+
+    model = Model(vocab_size=vocab_size, emb_dim=args.emb_dim, num_heads=args.attention_heads,
+                  num_fields=4, num_neighbors=args.max_neighbors, padding_val=padding_val)
+
+    # Optimizer Rectified Adam(from paper)
+    optimizer = tfa.optimizers.RectifiedAdam(args.lr)
+
+    train(dataset, len(dataset_list), args.batch_size, args.epochs, model, optimizer, not args.skip_wandb)
