@@ -17,3 +17,6 @@ python data_processing.py
 ```
 
 At this point your `data` dir should have `box`, `img`, `key`, `new_processed_files`, and `ocr_modified_files`
+
+
+If you are interested about the paper or implementation details you can this [report](https://wandb.ai/tulasi1729/information_extraction/reports/Information-Extraction-From-Documents---Vmlldzo0MDc3MDQ) published in Weights and Biases.
