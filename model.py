@@ -9,8 +9,10 @@ class Model(tf.keras.Model):
         super(Model, self).__init__()
         # Text embedding layer for neighbors
         self.text_emb = tf.keras.layers.Embedding(input_dim=vocab_size, output_dim=emb_dim, mask_zero=True)
-        # Embedding layer for relative positions of neighbors and candidate pos embedding.
-        self.pos_emb = pos_embedding(dim=emb_dim)
+        # Embedding Layer for candidate positions
+        self.cand_pos_emb = tf.keras.layers.Dense(emb_dim)
+        # Embedding layer for relative positions of neighbors.
+        self.neigh_pos_emb = pos_embedding(dim=emb_dim)
         # Field ID Embedding Layer
         self.field_emb = tf.keras.layers.Embedding(input_dim=num_fields, output_dim=emb_dim, mask_zero=False)
         # Self Attention layer
@@ -29,12 +31,12 @@ class Model(tf.keras.Model):
         # Value of the field_id must be less than or equal to  num_fields-1
         field_emb = self.field_emb(field_id) # Sample Input -> [[2], [1], [0]] # (batch_size, 1) # Output dim (batch_size, 1, emb_dim)
 
-        cand_emb = self.pos_emb(cand_pos)# Sample Input -> [[0.2, 0.3], [0.4, 0.5]] #(batch_size, 2) # Output dim (batch_size, emb_dim)
+        cand_emb = self.cand_pos_emb(cand_pos)# Sample Input -> [[0.2, 0.3], [0.4, 0.5]] #(batch_size, 2) # Output dim (batch_size, emb_dim)
 
         text_emb = self.text_emb(neighbors_text) # Input Size -> (batch_size, N, 1)  # Output dim (batch_size, N, emb_dim)
 
         #TODO how to apply mask here?
-        pos_emb = self.pos_emb(neighbors_pos) # Input Size -> (batch_size, N, 2) # Output dim (batch_size, N, emb_dim)
+        pos_emb = self.neigh_pos_emb(neighbors_pos) # Input Size -> (batch_size, N, 2) # Output dim (batch_size, N, emb_dim)
         
         concat_vector = tf.concat([tf.squeeze(text_emb), pos_emb], axis=-1) #(batch_size, N, 2*emb_dim)
 
