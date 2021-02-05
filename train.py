@@ -1,6 +1,8 @@
 from argparse import ArgumentParser
+import math
 import tensorflow as tf
 import tensorflow_addons as tfa
+import numpy as np
 import pandas as pd
 import json
 import wandb
@@ -18,7 +20,9 @@ models_path.mkdir(exist_ok=True)
 
 field_id_money = 0
 field_id_date = 1
-
+# Ground thruth labels:
+incorrect_id = 0
+correct_id = 1
 
 def generate_data(max_neighbors):
     for csv_file in preprocessed_path.glob('*.csv'):
@@ -28,10 +32,10 @@ def generate_data(max_neighbors):
         data = pd.read_csv(csv_file)
         for idx, row in data.iterrows():
             field_id = field_id_date if row['total_candidate'] == 'NA' else field_id_money
-            ground_truth = 0
+            ground_truth = incorrect_id
             if key_dict['total'].replace('RM','').replace('$','').strip() == str(row['total_candidate']) or\
                 key_dict['date'] == str(row['date_candidate']):
-                ground_truth = 1
+                ground_truth = correct_id
             try:
                 cand_pos = [(row['xmax']-row['xmin'])/2, (row['ymax']-row['ymin'])/2]
             except KeyError:
@@ -51,32 +55,64 @@ def generate_data(max_neighbors):
             yield field_id, cand_pos, neighbor_textid, new_pos, ground_truth
 
 
-def train_step(input_vals, model, optimizer, loss_function):
+def train_step(input_vals, model, optimizer, loss_function, debug):
     (field_id, cand_pos, neigh_text, neigh_pos, gt) = input_vals
     field_id = tf.expand_dims(field_id, axis=-1)
     neigh_text = tf.expand_dims(neigh_text, axis=-1)
     # print(field_id.shape, cand_pos.shape, neigh_text.shape, neigh_pos.shape)
+    if debug:
+        print(f"Ground truth: {gt}")
     with tf.GradientTape() as tape:
-        score = model(field_id, cand_pos, neigh_text, neigh_pos)
-        score = (score+1)/2
-        loss_value = loss_function([gt], [score])
+        scores = model(field_id, cand_pos, neigh_text, neigh_pos)
+        scores = (scores+1)/2
+        loss_value = loss_function([gt], [scores])
+        if debug:
+            print(f"Cosine sim scores: {scores}")
     gradients = tape.gradient(loss_value, model.trainable_variables)    
     optimizer.apply_gradients(zip(gradients, model.trainable_variables))
 
-    return loss_value
+    return loss_value, gt, scores
 
-def train(dataset, dataset_len, batch_size, epochs, model, optimizer, use_wandb):
-    train_loss = tf.keras.metrics.Mean(name='train_loss')
+def train(dataset, n_instances, batch_size, epochs, model, optimizer, reports_per_epoch, use_wandb, debug):
     loss_function = tf.keras.losses.BinaryCrossentropy()
-    for epoch in range(epochs):
-        for (batch, input_vals) in tqdm(enumerate(dataset), desc=f"Epoch {epoch}", total=(dataset_len // batch_size)):
-            loss = train_step(input_vals, model, optimizer, loss_function)
-            train_loss(loss)
+    batches_per_epoch = math.ceil(n_instances / batch_size)
+    eval_indices = [round((i+1) * (batches_per_epoch / reports_per_epoch)) for i in range(reports_per_epoch)]
 
-            if batch%50 == 0:
+    for epoch in range(epochs):
+        train_loss = tf.keras.metrics.Mean(name='train_loss')
+        train_acc = tf.keras.metrics.BinaryAccuracy(name='train_acc', threshold=0.5)
+        train_prec = tf.keras.metrics.Precision(name='train_pos_prec')
+        train_rec = tf.keras.metrics.Recall(name='train_pos_rec')
+
+        pbar_desc = "Epoch %d avg loss [%.3f], acc [%.3f], prec/rec [%.3f/%.3f]"
+        pbar = tqdm(enumerate(dataset),
+                    desc=(pbar_desc % (epoch, 0.0, 0.0, 0.0, 0.0)),
+                    total=(n_instances // batch_size))
+
+        for (batch_i, input_vals) in pbar:
+            loss, ground_truth, scores = train_step(input_vals, model, optimizer, loss_function, debug)
+
+            train_loss(loss)
+            train_acc.update_state(ground_truth, scores)
+            train_prec.update_state(ground_truth, scores, sample_weight=(ground_truth == correct_id))
+            train_rec.update_state(ground_truth, scores, sample_weight=(ground_truth == correct_id))
+            pbar.set_description(
+                pbar_desc % (epoch, train_loss.result(), train_acc.result(),
+                             train_prec.result(), train_rec.result()))
+
+            if batch_i in eval_indices:
+                results_dict = dict()
+                for metric in [train_loss, train_acc, train_prec, train_rec]:
+                    results_dict[metric.name] = metric.result().numpy()
+                    metric.reset_states()
+
+                # TODO evaluate test set, add to results_dict
+                #  instead of just measuring accuracy of each prediction, what is our accuracy when taking the highest
+                #  scoring candidate for each (doc, field_id) pair? How often do we guess the right candidate per doc?
+
                 if use_wandb:
-                    wandb.log({'loss': train_loss.result()})
-                print(f'Epoch {epoch} Batch {batch} Loss {train_loss.result()}')
+                    wandb.log(results_dict)
+                print(f'\nEpoch {epoch} batch {batch_i}:\n{results_dict}')
 
         if (epoch+1)%10 == 0:
             # Save the weights
@@ -87,12 +123,15 @@ if __name__ == "__main__":
     parser.add_argument('--skip_wandb', dest='skip_wandb', action='store_true',
                         help="To skip tracking experiments with weights&biases")
     parser.set_defaults(skip_wandb=False)
+    parser.add_argument('--debug', dest='debug', action='store_true', help='tiny dataset, no wandb, more printing')
+    parser.set_defaults(debug=False)
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--emb_dim', type=int, default=128,
                         help="Embedding dimension. Used for both token IDs and position")
     parser.add_argument('--attention_heads', type=int, default=8)
     parser.add_argument('--max_neighbors', type=int, default=30)
     parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--reports_per_epoch', type=int, default=4)
     parser.add_argument('--lr', type=float, default=0.001)
     args = parser.parse_args()
     print(vars(args))
@@ -102,12 +141,15 @@ if __name__ == "__main__":
 
     # Read dataset into list first, so we have the size
     dataset_list = list(generate_data(args.max_neighbors))
+    if args.debug:
+        args.skip_wandb = True
+        args.batch_size = 8
+        dataset_list = dataset_list[:32]
     dataset = tf.data.Dataset.from_generator(lambda: dataset_list,
                                              output_types=(tf.int32, tf.float32, tf.int32, tf.float32, tf.int32),
                                              output_shapes=((), (2,), (None,), (None, 2), ()))
     dataset = dataset.cache()
-    #dataset = dataset.prefetch(buffer_size=100)
-    # Note this will use zero as the padding value, consistent with padding_val above
+    # Note this will use zero as the padding value, consistent with padding_val below
     dataset = dataset.padded_batch(args.batch_size)
 
     if not args.skip_wandb:
@@ -126,4 +168,5 @@ if __name__ == "__main__":
     # Optimizer Rectified Adam(from paper)
     optimizer = tfa.optimizers.RectifiedAdam(args.lr)
 
-    train(dataset, len(dataset_list), args.batch_size, args.epochs, model, optimizer, not args.skip_wandb)
+    train(dataset, len(dataset_list), args.batch_size, args.epochs, model, optimizer,
+          args.reports_per_epoch, not args.skip_wandb, args.debug)
