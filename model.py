@@ -23,7 +23,7 @@ class Model(tf.keras.Model):
         # Max pooling layer for neighborhood embedding
         self.max_pool = tf.keras.layers.MaxPool1D(strides=num_neighbors, padding='same')
         # Cosine Similarity
-        self.cosine_sim = tf.keras.losses.CosineSimilarity()
+        self.cosine_sim = tf.keras.losses.CosineSimilarity(axis=1, reduction='none')
 
         self.padding_val = padding_val
 
@@ -60,8 +60,8 @@ class Model(tf.keras.Model):
 
         candidate_enc = self.projection(tf.concat([cand_emb, tf.squeeze(neighbor_enc)], axis=-1)) #(batch_size, 2, emb_dim)
 
-        sim_value = self.cosine_sim(candidate_enc, field_emb)
-        return sim_value
+        sim_values = self.cosine_sim(candidate_enc, tf.squeeze(field_emb))
+        return sim_values
 
 
 
