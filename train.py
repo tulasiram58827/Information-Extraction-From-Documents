@@ -1,5 +1,6 @@
 from argparse import ArgumentParser
 import math
+import random
 import tensorflow as tf
 import tensorflow_addons as tfa
 import numpy as np
@@ -12,6 +13,8 @@ from tqdm import tqdm
 from model import Model
 from utils import neighbor_sep
 
+# Set Random Seed
+random.seed(127)
 
 key_path = Path('data/key/')
 preprocessed_path = Path('data/new_processed_files')
@@ -24,14 +27,8 @@ field_id_date = 1
 incorrect_id = 0
 correct_id = 1
 
-def generate_data(max_neighbors, train=True, test_size=0.1):
-    files_count = len(list(preprocessed_path.glob('*.csv')))
-    num_files = int(files_count*(1-test_size))
-    for i, csv_file in enumerate(preprocessed_path.glob('*.csv')):
-        if train and i > num_files:
-            break
-        elif not train and i < num_files:
-            continue
+def generate_data(max_neighbors, files_list):
+    for i, csv_file in enumerate(files_list):
         key_file_path = f'{key_path / csv_file.stem}.json'
         with open(key_file_path, 'r') as f:
             key_dict = json.loads(f.read())
@@ -177,10 +174,18 @@ if __name__ == "__main__":
 
     # Set CPU as available physical device by specifying no GPUs
     #tf.config.set_visible_devices([], 'GPU')
+    
+    files = list(preprocessed_path.glob('*.csv'))
+    train_size = int(len(files)*(1-args.test_size))
+
+    random.shuffle(files)
+
+    train_files = files[:train_size]
+    test_files = files[train_size:]
 
     # Read dataset into list first, so we have the size
-    train_dataset_list = list(generate_data(args.max_neighbors, train=True, test_size=args.test_size))
-    test_dataset_list = list(generate_data(args.max_neighbors, train=False, test_size=args.test_size))
+    train_dataset_list = list(generate_data(args.max_neighbors, train_files))
+    test_dataset_list = list(generate_data(args.max_neighbors, test_files))
     print("Check......", len(train_dataset_list), len(test_dataset_list))
     if args.debug:
         args.skip_wandb = True
