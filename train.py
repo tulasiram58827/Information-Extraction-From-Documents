@@ -1,5 +1,6 @@
 from argparse import ArgumentParser
 import math
+import random
 import tensorflow as tf
 import tensorflow_addons as tfa
 import numpy as np
@@ -12,6 +13,8 @@ from tqdm import tqdm
 from model import Model
 from utils import neighbor_sep
 
+# Set Random Seed
+random.seed(127)
 
 key_path = Path('data/key/')
 preprocessed_path = Path('data/new_processed_files')
@@ -24,8 +27,8 @@ field_id_date = 1
 incorrect_id = 0
 correct_id = 1
 
-def generate_data(max_neighbors):
-    for csv_file in preprocessed_path.glob('*.csv'):
+def generate_data(max_neighbors, files_list):
+    for i, csv_file in enumerate(files_list):
         key_file_path = f'{key_path / csv_file.stem}.json'
         with open(key_file_path, 'r') as f:
             key_dict = json.loads(f.read())
@@ -73,7 +76,22 @@ def train_step(input_vals, model, optimizer, loss_function, debug):
 
     return loss_value, gt, scores
 
-def train(dataset, n_instances, batch_size, epochs, model, optimizer, reports_per_epoch, use_wandb, debug):
+def test_step(input_vals, model, loss_function, debug):
+    (field_id, cand_pos, neigh_text, neigh_pos, gt) = input_vals
+    field_id = tf.expand_dims(field_id, axis=-1)
+    neigh_text = tf.expand_dims(neigh_text, axis=-1)
+    if debug:
+        print(f"Ground truth: {gt}")
+    scores = model(field_id, cand_pos, neigh_text, neigh_pos)
+    scores = (scores+1)/2
+    loss_value = loss_function([gt], [scores])
+    if debug:
+        print(f"Cosine sim scores: {scores}")
+    return loss_value, gt, scores
+
+    
+
+def train(dataset, test_data, n_instances, batch_size, epochs, model, optimizer, reports_per_epoch, use_wandb, debug):
     loss_function = tf.keras.losses.BinaryCrossentropy()
     batches_per_epoch = math.ceil(n_instances / batch_size)
     eval_indices = [round((i+1) * (batches_per_epoch / reports_per_epoch)) for i in range(reports_per_epoch)]
@@ -83,12 +101,15 @@ def train(dataset, n_instances, batch_size, epochs, model, optimizer, reports_pe
         train_acc = tf.keras.metrics.BinaryAccuracy(name='train_acc', threshold=0.5)
         train_prec = tf.keras.metrics.Precision(name='train_pos_prec')
         train_rec = tf.keras.metrics.Recall(name='train_pos_rec')
+        test_loss = tf.keras.metrics.Mean(name='test_loss')
+        test_prec = tf.keras.metrics.Precision(name='test_pos_prec')
+        test_rec = tf.keras.metrics.Recall(name='test_pos_rec')
 
         pbar_desc = "Epoch %d avg loss [%.3f], acc [%.3f], prec/rec [%.3f/%.3f]"
         pbar = tqdm(enumerate(dataset),
                     desc=(pbar_desc % (epoch, 0.0, 0.0, 0.0, 0.0)),
                     total=(n_instances // batch_size))
-
+        
         for (batch_i, input_vals) in pbar:
             loss, ground_truth, scores = train_step(input_vals, model, optimizer, loss_function, debug)
 
@@ -105,6 +126,19 @@ def train(dataset, n_instances, batch_size, epochs, model, optimizer, reports_pe
                 for metric in [train_loss, train_acc, train_prec, train_rec]:
                     results_dict[metric.name] = metric.result().numpy()
                     metric.reset_states()
+                 
+                print("Evaluating test data......")
+                for i, batch_data in enumerate(test_data):
+                    loss, gt, scores = test_step(batch_data, model, loss_function, debug)
+                    test_loss(loss)
+                    test_prec.update_state(gt, scores, sample_weight=(gt == correct_id))
+                    test_rec.update_state(gt, scores, sample_weight=(gt == correct_id))
+                print("Test data Evaluated.")
+
+                test_results = dict()
+                for metric in [test_loss, test_prec, test_rec]:
+                    test_results[metric.name] = metric.result().numpy()
+                    metric.reset_states()
 
                 # TODO evaluate test set, add to results_dict
                 #  instead of just measuring accuracy of each prediction, what is our accuracy when taking the highest
@@ -112,7 +146,9 @@ def train(dataset, n_instances, batch_size, epochs, model, optimizer, reports_pe
 
                 if use_wandb:
                     wandb.log(results_dict)
+                    wandb.log(test_results)
                 print(f'\nEpoch {epoch} batch {batch_i}:\n{results_dict}')
+                print(f'Test results: \n {test_results}')
 
         if (epoch+1)%10 == 0:
             # Save the weights
@@ -133,24 +169,42 @@ if __name__ == "__main__":
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--reports_per_epoch', type=int, default=4)
     parser.add_argument('--lr', type=float, default=0.001)
+    parser.add_argument('--test_size', type=int, default=0.1)
     args = parser.parse_args()
-    print(vars(args))
 
     # Set CPU as available physical device by specifying no GPUs
-    tf.config.set_visible_devices([], 'GPU')
+    #tf.config.set_visible_devices([], 'GPU')
+    
+    files = list(preprocessed_path.glob('*.csv'))
+    train_size = int(len(files)*(1-args.test_size))
+
+    random.shuffle(files)
+
+    train_files = files[:train_size]
+    test_files = files[train_size:]
 
     # Read dataset into list first, so we have the size
-    dataset_list = list(generate_data(args.max_neighbors))
+    train_dataset_list = list(generate_data(args.max_neighbors, train_files))
+    test_dataset_list = list(generate_data(args.max_neighbors, test_files))
+    print("Check......", len(train_dataset_list), len(test_dataset_list))
     if args.debug:
         args.skip_wandb = True
         args.batch_size = 8
-        dataset_list = dataset_list[:32]
-    dataset = tf.data.Dataset.from_generator(lambda: dataset_list,
+        train_dataset_list = train_dataset_list[:32]
+    train_dataset = tf.data.Dataset.from_generator(lambda: train_dataset_list,
                                              output_types=(tf.int32, tf.float32, tf.int32, tf.float32, tf.int32),
                                              output_shapes=((), (2,), (None,), (None, 2), ()))
-    dataset = dataset.cache()
+    
+    test_dataset = tf.data.Dataset.from_generator(lambda: test_dataset_list,
+                                                 output_types=(tf.int32, tf.float32, tf.int32, tf.float32, tf.int32),
+                                                 output_shapes=((), (2,), (None,), (None, 2), ()))
+
+    train_dataset = train_dataset.cache()
+    test_dataset = test_dataset.cache()
+
     # Note this will use zero as the padding value, consistent with padding_val below
-    dataset = dataset.padded_batch(args.batch_size)
+    train_dataset = train_dataset.padded_batch(args.batch_size)
+    test_dataset = test_dataset.padded_batch(args.batch_size)
 
     if not args.skip_wandb:
         wandb.init(project="information_extraction")
@@ -167,6 +221,5 @@ if __name__ == "__main__":
 
     # Optimizer Rectified Adam(from paper)
     optimizer = tfa.optimizers.RectifiedAdam(args.lr)
-
-    train(dataset, len(dataset_list), args.batch_size, args.epochs, model, optimizer,
+    train(train_dataset, test_dataset, len(train_dataset_list), args.batch_size, args.epochs, model, optimizer,
           args.reports_per_epoch, not args.skip_wandb, args.debug)
