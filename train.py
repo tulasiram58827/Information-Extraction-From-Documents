@@ -27,6 +27,16 @@ field_id_date = 1
 incorrect_id = 0
 correct_id = 1
 
+
+hyperparameter_defaults = dict(
+    emb_dim = 128,
+    attention_heads = 8,
+    max_neighbors=30,
+    lr = 0.001,
+    epochs = 10,
+    )
+
+
 def generate_data(max_neighbors, files_list):
     for i, csv_file in enumerate(files_list):
         key_file_path = f'{key_path / csv_file.stem}.json'
@@ -166,7 +176,7 @@ if __name__ == "__main__":
                         help="Embedding dimension. Used for both token IDs and position")
     parser.add_argument('--attention_heads', type=int, default=8)
     parser.add_argument('--max_neighbors', type=int, default=30)
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--reports_per_epoch', type=int, default=4)
     parser.add_argument('--lr', type=float, default=0.001)
     parser.add_argument('--test_size', type=int, default=0.1)
@@ -207,7 +217,7 @@ if __name__ == "__main__":
     test_dataset = test_dataset.padded_batch(args.batch_size)
 
     if not args.skip_wandb:
-        wandb.init(project="information_extraction")
+        wandb.init(config=hyperparameter_defaults, project="information_extraction")
         wandb.config.update(vars(args))
 
     # TODO read vocab size from somewhere instead of hard-coding

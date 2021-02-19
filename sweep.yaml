@@ -1,0 +1,23 @@
+program: train.py
+method: bayes
+
+project: information_extraction
+
+metric:
+        name: test_pos_rec
+        goal: maximize
+
+parameters:
+        lr:
+                min: 0.001
+                max: 0.1
+        emb_dim:
+                values: [32, 64, 128, 256]
+        
+        attention_heads:
+                values: [2, 4, 8]
+        max_neighbors:
+                min: 15
+                max: 50
+
+
